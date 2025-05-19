@@ -9,11 +9,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,47 +35,32 @@ import com.example.jumpgpt.domain.model.Message
 import com.example.jumpgpt.ui.chat.components.ChatInput
 import com.example.jumpgpt.ui.chat.components.MessageBubble
 import com.example.jumpgpt.ui.history.HistoryViewModel
-import com.example.jumpgpt.util.TimeUtil
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.shrinkHorizontally
 import android.view.inputmethod.InputMethodManager
 import android.app.Activity
 import android.content.Context
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.togetherWith
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.PathBuilder
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.foundation.Canvas
-import androidx.compose.ui.graphics.drawscope.Stroke
-import com.example.jumpgpt.ui.chat.components.SoundWaveIcon
+import android.util.Log
 
 private object ChatScreenDefaults {
     const val VERTICAL_MESSAGE_SPACING = 8
@@ -98,7 +80,6 @@ private data class ChatGestureState(
 @Composable
 fun ChatScreen(
     onVoiceChatClick: (String) -> Unit,
-    onHistoryClick: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel(),
     historyViewModel: HistoryViewModel = hiltViewModel()
 ) {
@@ -108,7 +89,6 @@ fun ChatScreen(
     val clipboardManager = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val snackbarHostState = remember { SnackbarHostState() }
-    val context = LocalContext.current
     var isDrawerOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(
         initialValue = if (isDrawerOpen) DrawerValue.Open else DrawerValue.Closed
@@ -116,10 +96,85 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val configuration = LocalConfiguration.current
-    
+
     var drawerWidth by remember { mutableStateOf(320.dp) }
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    
+
+    var lastContentLength by remember { mutableStateOf(0) }
+    var isScrolling by remember { mutableStateOf(false) }
+    var lastScrollTime by remember { mutableStateOf(0L) }
+    val scrollCooldown = 100L
+
+    fun calculateScrollOffset(): Int {
+        val lastItemIndex = state.messages.size - 1
+        if (lastItemIndex < 0) return 0
+        
+        val layoutInfo = scrollState.layoutInfo
+        val visibleItemsInfo = layoutInfo.visibleItemsInfo
+        
+        // Find the last item's info
+        val lastItemInfo = visibleItemsInfo.find { it.index == lastItemIndex }
+            ?: return 0
+            
+        // Get the total height of the last item
+        val itemHeight = lastItemInfo.size
+        
+        // Add some padding to ensure we're at the bottom
+        return itemHeight + 100
+    }
+
+    LaunchedEffect(state.messages.lastOrNull()?.let { Pair(it.isStreaming, it.content) }) {
+        val lastMessage = state.messages.lastOrNull()
+        if (lastMessage != null) {
+            if (lastMessage.isStreaming) {
+                while (true) {
+                    try {
+                        scrollState.scrollToItem(
+                            index = state.messages.size - 1,
+                            scrollOffset = calculateScrollOffset()
+                        )
+                    } catch (e: Exception) {
+                        // Ignore scroll errors during streaming
+                    }
+                    delay(16)
+                }
+            } else {
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastScrollTime >= scrollCooldown) {
+                    val contentLength = lastMessage.content.length
+                    if (contentLength > lastContentLength) {
+                        lastContentLength = contentLength
+                        lastScrollTime = currentTime
+                        if (!isScrolling) {
+                            isScrolling = true
+                            try {
+                                scrollState.scrollToItem(
+                                    index = state.messages.size - 1,
+                                    scrollOffset = calculateScrollOffset()
+                                )
+                            } finally {
+                                isScrolling = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(state.messages.size) {
+        if (state.messages.isNotEmpty() && !isScrolling) {
+            try {
+                scrollState.scrollToItem(
+                    index = state.messages.size - 1,
+                    scrollOffset = calculateScrollOffset()
+                )
+            } catch (e: Exception) {
+                // Ignore scroll errors
+            }
+        }
+    }
+
     LaunchedEffect(imeVisible) {
         drawerWidth = if (imeVisible) {
             configuration.screenWidthDp.dp
@@ -128,29 +183,24 @@ fun ChatScreen(
         }
     }
 
-    // Watch for drawer target state changes to handle keyboard dismissal
     LaunchedEffect(drawerState.targetValue) {
         if (drawerState.targetValue == DrawerValue.Closed) {
             keyboardController?.hide()
             focusManager.clearFocus()
-            drawerWidth = 320.dp // Reset drawer width
+            drawerWidth = 320.dp
         }
     }
 
-    // Handle focus and keyboard when drawer state changes
     LaunchedEffect(drawerState.currentValue, drawerState.targetValue) {
         if (drawerState.targetValue == DrawerValue.Open) {
-            // Clear focus before drawer animation starts
             focusManager.clearFocus()
             keyboardController?.hide()
         } else if (drawerState.targetValue == DrawerValue.Closed) {
-            // Clear focus and hide keyboard when drawer is closing
             focusManager.clearFocus()
             keyboardController?.hide()
         }
     }
 
-    // Keep drawer state in sync with isDrawerOpen
     LaunchedEffect(isDrawerOpen) {
         if (isDrawerOpen) {
             focusManager.clearFocus()
@@ -161,7 +211,6 @@ fun ChatScreen(
         }
     }
 
-    // Keep isDrawerOpen in sync with drawer state
     LaunchedEffect(drawerState.currentValue) {
         isDrawerOpen = drawerState.currentValue == DrawerValue.Open
     }
@@ -185,16 +234,6 @@ fun ChatScreen(
                 message = error,
                 duration = SnackbarDuration.Short
             )
-        }
-    }
-
-    LaunchedEffect(state.messages.size) {
-        if (state.messages.isNotEmpty()) {
-            scrollState.animateScrollToItem(
-                index = state.messages.size - 1,
-                scrollOffset = 0
-            )
-            keyboardController?.hide()
         }
     }
 
@@ -331,8 +370,7 @@ private fun ChatHistoryIcon(
         val strokeWidth = 2.dp.toPx()
         val spacing = 5.dp.toPx()
         val startY = (size.height - 2 * spacing) / 2
-        
-        // Draw three lines with decreasing length
+
         drawLine(
             color = tint,
             start = Offset(0f, startY),
@@ -365,7 +403,7 @@ private fun ChatTopBar(
     modifier: Modifier = Modifier
 ) {
     TopAppBar(
-        title = { 
+        title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -408,9 +446,10 @@ private fun ChatMessageList(
     loadingTtsMessageId: String? = null,
     modifier: Modifier = Modifier
 ) {
+    val scope = rememberCoroutineScope()
+
     LazyColumn(
         state = scrollState,
-        contentPadding = PaddingValues(vertical = ChatScreenDefaults.VERTICAL_MESSAGE_SPACING.dp),
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) {
@@ -430,18 +469,17 @@ private fun ChatMessageList(
                             PointerEventType.Move -> {
                                 val currentY = event.changes[0].position.y
                                 val deltaY = currentY - lastY
-                                
-                                // Only start checking for keyboard dismissal if moving downward
+
                                 if (deltaY > 0 && !hasStartedGesture) {
                                     val adjustedStartY = startY + columnPosition.y
                                     val adjustedCurrentY = currentY + columnPosition.y
-                                    
+
                                     if (onDragGesture(adjustedStartY, adjustedCurrentY)) {
                                         hasStartedGesture = true
                                         event.changes.forEach { it.consume() }
                                     }
                                 }
-                                
+
                                 lastY = currentY
                             }
                             PointerEventType.Release -> {
@@ -450,7 +488,9 @@ private fun ChatMessageList(
                         }
                     }
                 }
-            }
+            },
+        contentPadding = PaddingValues(vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(ChatScreenDefaults.VERTICAL_MESSAGE_SPACING.dp)
     ) {
         items(
             items = messages,
@@ -474,7 +514,7 @@ private fun handleDragGesture(
     keyboardController: SoftwareKeyboardController?
 ): Boolean {
     val dragDistance = currentY - startY
-    val dragThreshold = 20f // Add a small threshold to ensure intentional drag
+    val dragThreshold = 20f
     
     return if (startY < chatInputTopY && 
                currentY >= chatInputTopY && 
@@ -506,18 +546,14 @@ private fun HistoryDrawerContent(
     val scope = rememberCoroutineScope()
     var canSearchFocus by remember { mutableStateOf(false) }
     
-    // Handle drawer state changes
     LaunchedEffect(drawerState.targetValue) {
         when (drawerState.targetValue) {
             DrawerValue.Open -> {
-                // Initially prevent focus
                 canSearchFocus = false
-                // Allow focus after a short delay
                 delay(300)
                 canSearchFocus = true
             }
             DrawerValue.Closed -> {
-                // Reset state when drawer is closing
                 canSearchFocus = false
                 isSearchFocused = false
                 searchQuery = ""
@@ -529,7 +565,6 @@ private fun HistoryDrawerContent(
     val handleCancel = remember<() -> Unit> {
         {
             scope.launch {
-                // Try to hide keyboard multiple ways
                 keyboardController?.hide()
                 val inputMethodManager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                 val currentFocus = (context as? Activity)?.window?.currentFocus
@@ -537,12 +572,12 @@ private fun HistoryDrawerContent(
                     inputMethodManager.hideSoftInputFromWindow(view.windowToken, 0)
                 }
                 
-                delay(50) // Short delay to ensure keyboard starts hiding
+                delay(50)
                 isSearchEnabled = false
                 searchQuery = ""
                 focusManager.clearFocus()
                 isSearchFocused = false
-                onSearchFocusChanged(false) // Notify parent about focus change
+                onSearchFocusChanged(false)
                 delay(100)
                 isSearchEnabled = true
             }
@@ -587,7 +622,7 @@ private fun HistoryDrawerContent(
                     .onFocusChanged { focusState -> 
                         if (isSearchEnabled) {
                             isSearchFocused = focusState.isFocused
-                            onSearchFocusChanged(focusState.isFocused) // Notify parent about focus change
+                            onSearchFocusChanged(focusState.isFocused)
                         }
                     }
                     .focusProperties { 
@@ -691,7 +726,6 @@ private fun HistoryDrawerContent(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConversationItem(
     conversation: Conversation,
