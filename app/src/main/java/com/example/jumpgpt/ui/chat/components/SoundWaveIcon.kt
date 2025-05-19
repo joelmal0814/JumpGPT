@@ -18,25 +18,21 @@ fun SoundWaveIcon(
         modifier = modifier.size(24.dp)
     ) {
         val strokeWidth = 2.dp.toPx()
-        val spacing = 4.5.dp.toPx() // Balanced spacing between lines
+        val spacing = 4.5.dp.toPx()
         val centerY = size.height / 2
         
-        // Calculate line heights
-        val maxHeight = size.height * 0.7f // 70% of total height
+        val maxHeight = size.height * 0.7f
         val heights = listOf(
-            maxHeight * 0.33f,  // First line: 1/3 of max height
-            maxHeight,          // Second line: full height
-            maxHeight * 0.5f,   // Third line: half height
-            maxHeight * 0.33f   // Fourth line: 1/3 of max height
+            maxHeight * 0.33f,
+            maxHeight,
+            maxHeight * 0.5f,
+            maxHeight * 0.33f
         )
         
-        // Calculate total width of the icon
         val totalWidth = (heights.size - 1) * spacing
         
-        // Calculate starting x position to center the entire icon
         val startX = (size.width - totalWidth) / 2
         
-        // Draw each line
         heights.forEachIndexed { index, height ->
             val x = startX + (index * spacing)
             val startY = centerY - (height / 2)

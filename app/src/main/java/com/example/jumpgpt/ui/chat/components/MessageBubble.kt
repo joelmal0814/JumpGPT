@@ -1,7 +1,5 @@
 package com.example.jumpgpt.ui.chat.components
 
-import android.util.Log
-import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -22,11 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.LineHeightStyle.Alignment as LineHeightAlignment
@@ -34,17 +30,13 @@ import androidx.compose.ui.text.style.LineHeightStyle.Trim as LineHeightTrim
 import com.example.jumpgpt.domain.model.Message
 import com.example.jumpgpt.domain.model.MessageRole
 import dev.jeziellago.compose.markdowntext.MarkdownText
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
-private const val TAG = "TokenStreaming"
-private const val FADE_LENGTH = 20 // How many characters to fade out after the fade point
-private const val CHARS_PER_SECOND = 40 // How many characters to reveal per second
-private const val MESSAGE_FONT_SIZE = 16 // Font size in sp for all message text
-private const val MESSAGE_LINE_HEIGHT = 23 // Line height in sp for all message text
-private const val MARKDOWN_LINE_HEIGHT = 14 // Further reduced line height for markdown
+private const val FADE_LENGTH = 20
+private const val CHARS_PER_SECOND = 40
+private const val MESSAGE_FONT_SIZE = 16
+private const val MESSAGE_LINE_HEIGHT = 23
 
-private val UserMessageBackground = Color(0xFFF1F1F1) // Light gray for user messages
+private val UserMessageBackground = Color(0xFFF1F1F1)
 
 @Composable
 fun StreamingText(
@@ -55,14 +47,12 @@ fun StreamingText(
 ) {
     Text(
         text = buildAnnotatedString {
-            // Fully visible text before fade point
             if (fadePoint > 0) {
                 withStyle(SpanStyle(color = color)) {
                     append(text.substring(0, fadePoint))
                 }
             }
             
-            // Fading text after fade point
             val remainingText = text.substring(fadePoint)
             val fadeLength = minOf(FADE_LENGTH, remainingText.length)
             
@@ -74,7 +64,6 @@ fun StreamingText(
                     }
                 }
                 
-                // Any remaining text is fully transparent
                 if (fadeLength < remainingText.length) {
                     withStyle(SpanStyle(color = color.copy(alpha = 0f))) {
                         append(remainingText.substring(fadeLength))
@@ -96,7 +85,6 @@ fun StreamingText(
     )
 }
 
-@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
@@ -135,7 +123,6 @@ fun MessageBubble(
         if (message.isStreaming && message.content.length > lastProcessedLength) {
             val newContentLength = message.content.length - lastProcessedLength
             animationDuration = (newContentLength * 1000 / CHARS_PER_SECOND)
-            Log.d(TAG, "New content length: $newContentLength, duration: $animationDuration ms")
             targetFadePoint = message.content.length
             lastProcessedLength = message.content.length
         } else if (!message.isStreaming) {
@@ -150,7 +137,7 @@ fun MessageBubble(
             .fillMaxWidth()
             .padding(
                 start = if (isUserMessage) 64.dp else 24.dp,
-                end = if (isUserMessage) 24.dp else 64.dp,
+                end = if (isUserMessage) 24.dp else 24.dp,
                 top = 8.dp,
                 bottom = 8.dp
             ),
@@ -198,7 +185,7 @@ fun MessageBubble(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         } else {
-                            NoHyphenMarkdownText(
+                            MarkdownText(
                                 markdown = message.content,
                                 color = contentColor,
                                 fontSize = MESSAGE_FONT_SIZE.sp,
@@ -270,7 +257,6 @@ private fun ThinkingIndicator(
         repeat(3) { index ->
             val infiniteTransition = rememberInfiniteTransition(label = "thinking")
             
-            // Bounce animation
             val bounceAnim by infiniteTransition.animateFloat(
                 initialValue = 0f,
                 targetValue = 1f,
@@ -285,7 +271,6 @@ private fun ThinkingIndicator(
                 label = "bounce"
             )
             
-            // Shimmer animation
             val shimmerAnim by infiniteTransition.animateFloat(
                 initialValue = 0.3f,
                 targetValue = 0.8f,
@@ -313,26 +298,3 @@ private fun ThinkingIndicator(
         }
     }
 }
-
-@Composable
-private fun NoHyphenMarkdownText(
-    markdown: String,
-    color: Color,
-    fontSize: TextUnit,
-    style: TextStyle,
-    modifier: Modifier = Modifier
-) {
-    // Replace any soft hyphens or word break opportunities with spaces
-    val processedMarkdown = markdown.replace("\u00AD", " ")
-                                  .replace("\u200B", " ")
-                                  .replace("-\n", " ")
-                                  .replace("- ", " ")
-    
-    MarkdownText(
-        markdown = processedMarkdown,
-        color = color,
-        fontSize = fontSize,
-        style = style,
-        modifier = modifier
-    )
-} 

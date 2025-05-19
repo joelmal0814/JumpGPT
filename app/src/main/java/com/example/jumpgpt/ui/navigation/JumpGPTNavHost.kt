@@ -39,24 +39,20 @@ fun JumpGPTNavHost(
         navController = navController,
         startDestination = startDestination
     ) {
-        // Base route without arguments
         composable(route = Screen.Chat.route) {
             ChatScreen(
                 onVoiceChatClick = { conversationId -> 
                     if (conversationId.isNotEmpty()) {
                         navController.navigate(Screen.VoiceChat.createRoute(conversationId))
                     } else {
-                        // Create a new conversation first
                         chatViewModel.createNewConversation { newId ->
                             navController.navigate(Screen.VoiceChat.createRoute(newId))
                         }
                     }
                 },
-                onHistoryClick = { /* No longer needed since we're using a drawer */ }
             )
         }
         
-        // Route with optional conversationId
         composable(
             route = Screen.Chat.ROUTE_WITH_ARGS,
             arguments = listOf(
@@ -72,13 +68,11 @@ fun JumpGPTNavHost(
                     if (conversationId.isNotEmpty()) {
                         navController.navigate(Screen.VoiceChat.createRoute(conversationId))
                     } else {
-                        // Create a new conversation first
                         chatViewModel.createNewConversation { newId ->
                             navController.navigate(Screen.VoiceChat.createRoute(newId))
                         }
                     }
                 },
-                onHistoryClick = { /* No longer needed since we're using a drawer */ }
             )
         }
         
@@ -92,17 +86,12 @@ fun JumpGPTNavHost(
                 ?: throw IllegalStateException("Conversation ID is required")
             
             VoiceChatScreen(
-                onClose = { 
-                    // Navigate back to the chat screen with the conversation ID
+                conversationId = conversationId,
+                onClose = {
                     navController.navigate(Screen.Chat.createRoute(conversationId)) {
-                        popUpTo(Screen.Chat.route) {
-                            inclusive = true
-                        }
+                        popUpTo(Screen.Chat.route) { inclusive = true }
                     }
-                },
-                onMessageSent = { /* Messages are handled by the ViewModel */ },
-                viewModel = hiltViewModel(),
-                activeConversationId = conversationId
+                }
             )
         }
     }

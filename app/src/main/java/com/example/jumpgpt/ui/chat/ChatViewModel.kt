@@ -2,14 +2,12 @@ package com.example.jumpgpt.ui.chat
 
 import android.content.Context
 import android.media.MediaRecorder
-import android.os.Build
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.jumpgpt.data.repository.ChatRepository
 import com.example.jumpgpt.domain.model.ChatState
-import com.example.jumpgpt.domain.model.Conversation
 import com.example.jumpgpt.domain.model.Message
 import com.example.jumpgpt.domain.model.MessageRole
 import com.example.jumpgpt.util.AudioPlayer
@@ -52,7 +50,6 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // Load conversation if ID is provided
         savedStateHandle.get<String>("conversationId")?.let { id ->
             if (id.isNotEmpty()) {
                 loadConversation(id)
@@ -64,7 +61,6 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (id.isEmpty()) {
-                    // Empty ID means new chat
                     currentConversationId = null
                     _state.update { it.copy(
                         conversation = null,
@@ -93,14 +89,12 @@ class ChatViewModel @Inject constructor(
             try {
                 val conversation = _state.value.conversation
                 if (conversation != null) {
-                    // Update existing conversation
                     chatRepository.updateConversation(conversation.copy(
                         messages = messages,
                         lastMessage = messages.lastOrNull { !it.isThinking }?.content,
                         lastUpdated = TimeUtil.now()
                     ))
                 } else if (messages.size >= 2) {
-                    // Create new conversation after first exchange
                     val id = chatRepository.createConversation(messages)
                     currentConversationId = id
                     loadConversation(id)
@@ -128,8 +122,7 @@ class ChatViewModel @Inject constructor(
 
     private fun sendMessage(text: String, isVoiceMessage: Boolean) {
         streamStartTime = System.currentTimeMillis()
-        Log.d(TAG, "ViewModel: Starting message send at 0ms")
-        
+
         val userMessage = Message(
             id = UUID.randomUUID().toString(),
             content = text,
@@ -148,7 +141,6 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            Log.d(TAG, "ViewModel: Creating assistant message at ${System.currentTimeMillis() - streamStartTime}ms")
             val aiMessage = Message(
                 id = UUID.randomUUID().toString(),
                 content = "",
@@ -162,11 +154,7 @@ class ChatViewModel @Inject constructor(
                 messages = messagesWithAi
             ) }
 
-            Log.d(TAG, "ViewModel: Starting to collect response at ${System.currentTimeMillis() - streamStartTime}ms")
             chatRepository.sendMessage(messagesWithAi).collect { response ->
-                val currentTime = System.currentTimeMillis() - streamStartTime
-                Log.d(TAG, "ViewModel: Update received at ${currentTime}ms - isStreaming: ${response.isStreaming}, content length: ${response.content.length}")
-                
                 val finalMessages = _state.value.messages.map { message ->
                     if (message.id == aiMessage.id) {
                         response.copy(
@@ -185,56 +173,10 @@ class ChatViewModel @Inject constructor(
                     )
                 }
 
-                // Save conversation after response is complete
                 if (!response.isStreaming) {
                     saveConversation(finalMessages)
                 }
             }
-        }
-    }
-
-    fun onVoiceInputStart() {
-        try {
-            audioFile = File(context.cacheDir, "audio_record.mp3")
-            audioFile?.deleteOnExit()
-
-            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setOutputFile(audioFile?.absolutePath)
-                prepare()
-                start()
-            }
-
-            _state.update { it.copy(isRecording = true) }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    fun onVoiceInputStop() {
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-            mediaRecorder = null
-            
-            _state.update { it.copy(isRecording = false) }
-
-            viewModelScope.launch {
-                _state.update { it.copy(isLoading = true) }
-                kotlinx.coroutines.delay(1000)
-                sendMessage("This is a simulated voice transcription", true)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
@@ -260,9 +202,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun onCopyMessage(messageId: String) {
-    }
-
     fun showError(message: String) {
         _state.update { it.copy(error = message) }
     }
@@ -270,11 +209,8 @@ class ChatViewModel @Inject constructor(
     fun createNewConversation(onComplete: (String) -> Unit) {
         viewModelScope.launch {
             try {
-                // Create a new conversation with a default title
                 val conversationId = chatRepository.createConversation(emptyList())
-                // Load the new conversation
                 loadConversation(conversationId)
-                // Call the completion callback with the new ID
                 onComplete(conversationId)
             } catch (e: Exception) {
                 showError("Failed to create new conversation")

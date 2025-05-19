@@ -28,16 +28,13 @@ class AudioPlayer @Inject constructor(
 
     fun playAudio(audioFile: File, messageId: String) {
         try {
-            // If same audio is already playing, stop it
             if (currentPlayingId.value == messageId && isPlaying.value) {
                 stop()
                 return
             }
             
-            // Stop any currently playing audio
             stop()
             
-            // Create and configure new MediaPlayer
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(audioFile.absolutePath)
                 setOnCompletionListener {

@@ -26,12 +26,12 @@ import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
-private const val SILENCE_THRESHOLD = 2000L // 2 seconds of silence to trigger auto-stop
-private const val MAX_RECORDING_DURATION = 30000L // 30 seconds maximum recording time
-private const val VOICE_ACTIVATION_THRESHOLD = 2000 // Increased threshold for voice detection
-private const val VOICE_CHECK_INTERVAL = 100L // Check for voice every 100ms
-private const val MIN_RECORDING_DURATION = 1000L // Minimum 1 second recording before silence detection starts
-private const val MIN_VOICE_ACTIVATION_DURATION = 300L // Minimum duration of voice activation to start recording
+private const val SILENCE_THRESHOLD = 2000L
+private const val MAX_RECORDING_DURATION = 30000L
+private const val VOICE_ACTIVATION_THRESHOLD = 2000
+private const val VOICE_CHECK_INTERVAL = 100L
+private const val MIN_RECORDING_DURATION = 1000L
+private const val MIN_VOICE_ACTIVATION_DURATION = 300L
 
 @HiltViewModel
 class VoiceChatViewModel @Inject constructor(
@@ -56,7 +56,6 @@ class VoiceChatViewModel @Inject constructor(
     private var recordingStartTime: Long = 0
 
     init {
-        // Listen for audio player state changes
         viewModelScope.launch {
             audioPlayer.isPlaying.collect { isPlaying ->
                 _state.update { it.copy(isPlayingResponse = isPlaying) }
@@ -74,11 +73,9 @@ class VoiceChatViewModel @Inject constructor(
         isListeningForVoice = true
         _state.update { it.copy(isListeningForVoice = true) }
         
-        // Create the audio file immediately
         audioFile = File(context.cacheDir, "voice_record_${System.currentTimeMillis()}.mp3")
         audioFile?.deleteOnExit()
         
-        // Initialize MediaRecorder for both voice detection and recording
         try {
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(context)
@@ -96,7 +93,6 @@ class VoiceChatViewModel @Inject constructor(
                 start()
             }
             
-            // Start duration counter immediately
             recordingStartTime = System.currentTimeMillis()
             _state.update { it.copy(
                 isRecording = true,
@@ -120,18 +116,15 @@ class VoiceChatViewModel @Inject constructor(
                 val currentLevel = mediaRecorder?.maxAmplitude ?: 0
                 
                 if (currentLevel >= VOICE_ACTIVATION_THRESHOLD) {
-                    // Voice detected, start or continue timing
                     if (voiceStartTime == null) {
                         voiceStartTime = System.currentTimeMillis()
                     } else if (System.currentTimeMillis() - voiceStartTime >= MIN_VOICE_ACTIVATION_DURATION) {
-                        // Voice has been detected for long enough, continue recording
                         isListeningForVoice = false
                         _state.update { it.copy(isListeningForVoice = false) }
                         startSilenceDetection()
                         break
                     }
                 } else {
-                    // If voice level drops below threshold before minimum duration, stop recording
                     if (voiceStartTime != null && System.currentTimeMillis() - voiceStartTime < MIN_VOICE_ACTIVATION_DURATION) {
                         stopRecording()
                         voiceStartTime = null
@@ -158,7 +151,6 @@ class VoiceChatViewModel @Inject constructor(
                 return
             }
 
-            // Make sure any existing recorder is cleaned up
             mediaRecorder?.apply {
                 try {
                     stop()
@@ -214,7 +206,6 @@ class VoiceChatViewModel @Inject constructor(
             silenceDetectionJob?.cancel()
             voiceActivationJob?.cancel()
             
-            // First stop and release the recorder
             try {
                 mediaRecorder?.apply {
                     stop()
@@ -271,7 +262,6 @@ class VoiceChatViewModel @Inject constructor(
         try {
             _state.update { it.copy(isProcessing = true) }
             
-            // Create user message and assistant thinking message
             val userMessage = Message(
                 id = UUID.randomUUID().toString(),
                 content = text,
@@ -288,16 +278,13 @@ class VoiceChatViewModel @Inject constructor(
                 isThinking = true
             )
 
-            // Get the active conversation
             val conversationId = activeConversationId ?: throw IllegalStateException("No active conversation")
             val conversation = chatRepository.getConversationById(conversationId)
                 ?: throw IllegalStateException("Active conversation not found")
 
-            // Add both messages to the conversation
             val updatedMessages = conversation.messages + userMessage + assistantMessage
             chatRepository.updateConversation(conversation.copy(messages = updatedMessages))
             
-            // Send message and get response using non-streaming API
             chatRepository.sendMessage(updatedMessages, isVoiceMessage = true)
                 .catch { e ->
                     Log.e("VoiceChatViewModel", "Error in message flow", e)
@@ -315,7 +302,6 @@ class VoiceChatViewModel @Inject constructor(
                         return@collect
                     }
 
-                    // Add the assistant's response to the conversation
                     val finalMessages = updatedMessages.map { message ->
                         if (message.id == assistantMessage.id) {
                             response.copy(
@@ -333,14 +319,11 @@ class VoiceChatViewModel @Inject constructor(
                         lastUpdated = TimeUtil.now()
                     ))
 
-                    // Convert response to speech and play it
                     try {
                         val audioFile = chatRepository.textToSpeech(response.content, response.id)
                         if (audioFile.exists()) {
-                            Log.d("VoiceChatViewModel", "Playing audio response from file: ${audioFile.absolutePath}")
                             audioPlayer.playAudio(audioFile, response.id)
                             
-                            // Wait for audio to finish playing
                             while (audioPlayer.isPlaying.value) {
                                 delay(100)
                             }
@@ -367,6 +350,12 @@ class VoiceChatViewModel @Inject constructor(
         audioPlayer.stop()
     }
 
+    fun restartVoiceActivation() {
+        if (!_state.value.isProcessing) {
+            startVoiceActivation()
+        }
+    }
+
     private fun startDurationCounter() {
         durationJob?.cancel()
         durationJob = viewModelScope.launch {
@@ -376,7 +365,6 @@ class VoiceChatViewModel @Inject constructor(
                 duration += 1000
                 _state.update { it.copy(recordingDuration = duration) }
                 
-                // Auto-stop if recording exceeds maximum duration
                 if (duration >= MAX_RECORDING_DURATION) {
                     stopRecording()
                     break
@@ -389,11 +377,10 @@ class VoiceChatViewModel @Inject constructor(
         silenceDetectionJob?.cancel()
         silenceDetectionJob = viewModelScope.launch {
             while (true) {
-                delay(100) // Check every 100ms
+                delay(100)
                 val currentLevel = mediaRecorder?.maxAmplitude ?: 0
                 val currentTime = System.currentTimeMillis()
                 
-                // Only start silence detection after minimum recording duration
                 if (currentTime - recordingStartTime < MIN_RECORDING_DURATION) {
                     lastAudioLevel = currentLevel
                     continue
@@ -401,15 +388,12 @@ class VoiceChatViewModel @Inject constructor(
                 
                 if (currentLevel < VOICE_ACTIVATION_THRESHOLD) {
                     if (lastAudioLevel >= VOICE_ACTIVATION_THRESHOLD) {
-                        // Just started silence
                         silenceStartTime = currentTime
                     } else if (currentTime - silenceStartTime > SILENCE_THRESHOLD) {
-                        // Silence duration exceeded threshold
                         stopRecording()
                         break
                     }
                 } else {
-                    // Reset silence timer if we detect sound
                     silenceStartTime = currentTime
                 }
                 

@@ -18,17 +18,11 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // Add OpenAI API key from local.properties
-        val apiKey = rootProject.file("local.properties")
-            .readLines()
-            .firstOrNull { it.startsWith("OPENAI_API_KEY=") }
-            ?.substringAfter("=")
-            ?: ""
-            
+        //Hardcoded API Key for Interview Project
         buildConfigField(
             "String",
             "OPENAI_API_KEY",
-            "\"$apiKey\""
+            "\"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\""
         )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -55,7 +49,6 @@ android {
     }
     buildFeatures {
         compose = true
-        // Add this to enable BuildConfig generation
         buildConfig = true
     }
     composeOptions {
@@ -80,19 +73,19 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     
     // Navigation
-    implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation(libs.androidx.navigation.compose)
     
     // Dependency Injection
-    implementation("com.google.dagger:hilt-android:2.50")
-    kapt("com.google.dagger:hilt-android-compiler:2.50")
+    implementation(libs.hilt.android)
+    kapt(libs.hilt.android.compiler)
     implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
 
     // Room Database
-    val roomVersion = "2.6.1"
+    val roomVersion = "2.7.0"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     kapt("androidx.room:room-compiler:$roomVersion")

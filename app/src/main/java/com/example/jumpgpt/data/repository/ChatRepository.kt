@@ -81,7 +81,6 @@ class ChatRepository @Inject constructor(
     }
 
     suspend fun updateConversation(conversation: Conversation) {
-        // If this is the first message exchange, generate a title
         val updatedConversation = if (conversation.messages.size >= 2 && conversation.title == "New Conversation") {
             conversation.copy(
                 title = generateTitle(conversation.messages)
@@ -138,21 +137,18 @@ class ChatRepository @Inject constructor(
 
     fun sendMessage(messages: List<Message>, isVoiceMessage: Boolean = false): Flow<Message> = flow {
         try {
-            // Find the AI message ID from the input messages
             val aiMessageId = messages.find { it.role == MessageRole.ASSISTANT && it.isThinking }?.id
                 ?: throw IllegalStateException("No assistant message found")
 
-            // Construct the request
             val request = ChatCompletionRequest(
                 model = Constants.DEFAULT_MODEL,
                 messages = messages.map { ChatMessage.fromDomain(it) },
                 temperature = Constants.DEFAULT_TEMPERATURE,
                 maxTokens = Constants.DEFAULT_MAX_TOKENS,
-                stream = !isVoiceMessage  // Enable streaming only for text chat
+                stream = !isVoiceMessage
             )
 
             if (isVoiceMessage) {
-                // Non-streaming API call for voice messages
                 val response = chatApi.getChatCompletion(
                     authorization = Constants.OPENAI_API_KEY,
                     request = request
@@ -173,7 +169,6 @@ class ChatRepository @Inject constructor(
                     isStreaming = false
                 ))
             } else {
-                // Streaming API call for text messages
                 val response = chatApi.getChatCompletionStream(
                     authorization = Constants.OPENAI_API_KEY,
                     request = request
@@ -199,7 +194,6 @@ class ChatRepository @Inject constructor(
                     }
                 }
 
-                // Emit the final message
                 emit(Message(
                     id = aiMessageId,
                     content = accumulatedContent,
@@ -221,7 +215,6 @@ class ChatRepository @Inject constructor(
     }
 
     suspend fun textToSpeech(text: String, messageId: String): File {
-        // Check if cached file exists
         val cachedFile = File(audioCacheDir, "$messageId.mp3")
         if (cachedFile.exists()) {
             return cachedFile
@@ -237,7 +230,6 @@ class ChatRepository @Inject constructor(
             throw Exception("TTS API call failed with code ${response.code()}: ${response.errorBody()?.string()}")
         }
 
-        // Write the audio data to the cache file
         response.body()?.byteStream()?.use { input ->
             cachedFile.outputStream().use { output ->
                 input.copyTo(output)
@@ -249,7 +241,7 @@ class ChatRepository @Inject constructor(
 
     private fun cleanupOldCacheFiles() {
         try {
-            val maxCacheAge = 24 * 60 * 60 * 1000L // 24 hours in milliseconds
+            val maxCacheAge = 24 * 60 * 60 * 1000L
             val now = System.currentTimeMillis()
             
             audioCacheDir.listFiles()?.forEach { file ->
@@ -297,7 +289,6 @@ class ChatRepository @Inject constructor(
             Log.e(TAG, "Error in speechToText", e)
             throw Exception("Failed to convert speech to text: ${e.localizedMessage}")
         } finally {
-            // Clean up the audio file after we're done with it
             try {
                 if (audioFile.exists()) {
                     audioFile.delete()
@@ -319,7 +310,6 @@ class ChatRepository @Inject constructor(
                 if (line.startsWith("data: ")) {
                     val json = line.substring(6).trim()
                     if (json == "[DONE]") {
-                        Log.d(TAG, "Repository: [DONE] signal received at ${System.currentTimeMillis() - startTime}ms")
                         break
                     }
 
@@ -330,12 +320,8 @@ class ChatRepository @Inject constructor(
                             val delta = choices[0].asJsonObject.get("delta")?.asJsonObject
                             if (delta != null) {
                                 val chatDelta = gson.fromJson(delta, ChatDelta::class.java)
-                                if (chatDelta.content != null) {
-                                    Log.d(TAG, "Repository: Token '${chatDelta.content}' received at ${System.currentTimeMillis() - startTime}ms")
-                                }
                                 onDelta(chatDelta)
-                                // Add a tiny delay to ensure UI can keep up
-                                delay(16) // One frame at 60fps
+                                delay(16)
                             }
                         }
                     } catch (e: Exception) {
