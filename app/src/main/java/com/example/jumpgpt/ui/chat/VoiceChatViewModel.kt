@@ -20,7 +20,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
@@ -29,9 +28,10 @@ import javax.inject.Inject
 
 private const val SILENCE_THRESHOLD = 2000L // 2 seconds of silence to trigger auto-stop
 private const val MAX_RECORDING_DURATION = 30000L // 30 seconds maximum recording time
-private const val VOICE_ACTIVATION_THRESHOLD = 1000 // Lower threshold for voice detection
+private const val VOICE_ACTIVATION_THRESHOLD = 2000 // Increased threshold for voice detection
 private const val VOICE_CHECK_INTERVAL = 100L // Check for voice every 100ms
 private const val MIN_RECORDING_DURATION = 1000L // Minimum 1 second recording before silence detection starts
+private const val MIN_VOICE_ACTIVATION_DURATION = 300L // Minimum duration of voice activation to start recording
 
 @HiltViewModel
 class VoiceChatViewModel @Inject constructor(
@@ -45,6 +45,7 @@ class VoiceChatViewModel @Inject constructor(
 
     private var mediaRecorder: MediaRecorder? = null
     private var audioFile: File? = null
+    private var tempAudioFile: File? = null
     private var durationJob: Job? = null
     private var silenceDetectionJob: Job? = null
     private var voiceActivationJob: Job? = null
@@ -52,6 +53,7 @@ class VoiceChatViewModel @Inject constructor(
     private var silenceStartTime: Long = 0
     private var isListeningForVoice = false
     private var activeConversationId: String? = null
+    private var recordingStartTime: Long = 0
 
     init {
         // Listen for audio player state changes
@@ -72,7 +74,11 @@ class VoiceChatViewModel @Inject constructor(
         isListeningForVoice = true
         _state.update { it.copy(isListeningForVoice = true) }
         
-        // Initialize MediaRecorder for voice detection
+        // Create the audio file immediately
+        audioFile = File(context.cacheDir, "voice_record_${System.currentTimeMillis()}.mp3")
+        audioFile?.deleteOnExit()
+        
+        // Initialize MediaRecorder for both voice detection and recording
         try {
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(context)
@@ -85,30 +91,51 @@ class VoiceChatViewModel @Inject constructor(
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioEncodingBitRate(128000)
                 setAudioSamplingRate(44100)
-                setOutputFile("/dev/null") // We don't need to save the audio during voice detection
+                setOutputFile(audioFile?.absolutePath)
                 prepare()
                 start()
             }
+            
+            // Start duration counter immediately
+            recordingStartTime = System.currentTimeMillis()
+            _state.update { it.copy(
+                isRecording = true,
+                recordingDuration = 0L,
+                error = null
+            ) }
+            
+            startDurationCounter()
+            
         } catch (e: Exception) {
-            handleError("Failed to initialize voice detection: ${e.localizedMessage}")
+            handleError("Failed to initialize recording: ${e.localizedMessage}")
             return
         }
         
         voiceActivationJob?.cancel()
         voiceActivationJob = viewModelScope.launch {
+            var voiceStartTime: Long? = null
+            
             while (isListeningForVoice) {
                 delay(VOICE_CHECK_INTERVAL)
                 val currentLevel = mediaRecorder?.maxAmplitude ?: 0
                 
                 if (currentLevel >= VOICE_ACTIVATION_THRESHOLD) {
-                    // Voice detected, start recording
-                    isListeningForVoice = false
-                    _state.update { it.copy(isListeningForVoice = false) }
-                    mediaRecorder?.stop()
-                    mediaRecorder?.release()
-                    mediaRecorder = null
-                    startRecording()
-                    break
+                    // Voice detected, start or continue timing
+                    if (voiceStartTime == null) {
+                        voiceStartTime = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - voiceStartTime >= MIN_VOICE_ACTIVATION_DURATION) {
+                        // Voice has been detected for long enough, continue recording
+                        isListeningForVoice = false
+                        _state.update { it.copy(isListeningForVoice = false) }
+                        startSilenceDetection()
+                        break
+                    }
+                } else {
+                    // If voice level drops below threshold before minimum duration, stop recording
+                    if (voiceStartTime != null && System.currentTimeMillis() - voiceStartTime < MIN_VOICE_ACTIVATION_DURATION) {
+                        stopRecording()
+                        voiceStartTime = null
+                    }
                 }
             }
         }
@@ -130,6 +157,17 @@ class VoiceChatViewModel @Inject constructor(
                 handleError("Microphone is currently in use by another application")
                 return
             }
+
+            // Make sure any existing recorder is cleaned up
+            mediaRecorder?.apply {
+                try {
+                    stop()
+                } catch (e: Exception) {
+                    // Ignore stop errors
+                }
+                release()
+            }
+            mediaRecorder = null
 
             audioFile = File(context.cacheDir, "voice_record_${System.currentTimeMillis()}.mp3")
             audioFile?.deleteOnExit()
@@ -155,6 +193,7 @@ class VoiceChatViewModel @Inject constructor(
                 }
             }
 
+            recordingStartTime = System.currentTimeMillis()
             _state.update { it.copy(
                 isRecording = true,
                 recordingDuration = 0L,
@@ -173,6 +212,7 @@ class VoiceChatViewModel @Inject constructor(
         try {
             durationJob?.cancel()
             silenceDetectionJob?.cancel()
+            voiceActivationJob?.cancel()
             
             // First stop and release the recorder
             try {
@@ -257,8 +297,8 @@ class VoiceChatViewModel @Inject constructor(
             val updatedMessages = conversation.messages + userMessage + assistantMessage
             chatRepository.updateConversation(conversation.copy(messages = updatedMessages))
             
-            // Send message and get response
-            chatRepository.sendMessage(updatedMessages)
+            // Send message and get response using non-streaming API
+            chatRepository.sendMessage(updatedMessages, isVoiceMessage = true)
                 .catch { e ->
                     Log.e("VoiceChatViewModel", "Error in message flow", e)
                     emit(Message(
@@ -296,7 +336,7 @@ class VoiceChatViewModel @Inject constructor(
                     // Convert response to speech and play it
                     try {
                         val audioFile = chatRepository.textToSpeech(response.content, response.id)
-                        if (audioFile != null && audioFile.exists()) {
+                        if (audioFile.exists()) {
                             Log.d("VoiceChatViewModel", "Playing audio response from file: ${audioFile.absolutePath}")
                             audioPlayer.playAudio(audioFile, response.id)
                             
@@ -348,8 +388,6 @@ class VoiceChatViewModel @Inject constructor(
     private fun startSilenceDetection() {
         silenceDetectionJob?.cancel()
         silenceDetectionJob = viewModelScope.launch {
-            var recordingStartTime = System.currentTimeMillis()
-            
             while (true) {
                 delay(100) // Check every 100ms
                 val currentLevel = mediaRecorder?.maxAmplitude ?: 0
@@ -404,6 +442,7 @@ class VoiceChatViewModel @Inject constructor(
         mediaRecorder?.release()
         mediaRecorder = null
         audioFile?.delete()
+        tempAudioFile?.delete()
         audioPlayer.release()
     }
 } 

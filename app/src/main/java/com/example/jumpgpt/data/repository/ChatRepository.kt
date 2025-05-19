@@ -21,7 +21,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
 import okhttp3.ResponseBody
@@ -137,7 +136,7 @@ class ChatRepository @Inject constructor(
         }
     }
 
-    suspend fun sendMessage(messages: List<Message>): Flow<Message> = flow {
+    fun sendMessage(messages: List<Message>, isVoiceMessage: Boolean = false): Flow<Message> = flow {
         try {
             // Find the AI message ID from the input messages
             val aiMessageId = messages.find { it.role == MessageRole.ASSISTANT && it.isThinking }?.id
@@ -149,31 +148,66 @@ class ChatRepository @Inject constructor(
                 messages = messages.map { ChatMessage.fromDomain(it) },
                 temperature = Constants.DEFAULT_TEMPERATURE,
                 maxTokens = Constants.DEFAULT_MAX_TOKENS,
-                stream = false
+                stream = !isVoiceMessage  // Enable streaming only for text chat
             )
 
-            // Make the API call
-            val response = chatApi.getChatCompletion(
-                authorization = Constants.OPENAI_API_KEY,
-                request = request
-            )
+            if (isVoiceMessage) {
+                // Non-streaming API call for voice messages
+                val response = chatApi.getChatCompletion(
+                    authorization = Constants.OPENAI_API_KEY,
+                    request = request
+                )
 
-            if (!response.isSuccessful) {
-                throw Exception("API call failed with code ${response.code()}: ${response.errorBody()?.string()}")
+                if (!response.isSuccessful) {
+                    throw Exception("API call failed with code ${response.code()}: ${response.errorBody()?.string()}")
+                }
+
+                val content = response.body()?.choices?.firstOrNull()?.message?.content
+                    ?: throw Exception("No content in response")
+
+                emit(Message(
+                    id = aiMessageId,
+                    content = content,
+                    role = MessageRole.ASSISTANT,
+                    timestamp = TimeUtil.now(),
+                    isStreaming = false
+                ))
+            } else {
+                // Streaming API call for text messages
+                val response = chatApi.getChatCompletionStream(
+                    authorization = Constants.OPENAI_API_KEY,
+                    request = request
+                )
+
+                if (!response.isSuccessful) {
+                    throw Exception("API call failed with code ${response.code()}: ${response.errorBody()?.string()}")
+                }
+
+                val responseBody = response.body() ?: throw Exception("Empty response from API")
+                var accumulatedContent = ""
+
+                parseStreamingResponse(responseBody, System.currentTimeMillis()) { delta ->
+                    if (delta.content != null) {
+                        accumulatedContent += delta.content
+                        emit(Message(
+                            id = aiMessageId,
+                            content = accumulatedContent,
+                            role = MessageRole.ASSISTANT,
+                            timestamp = TimeUtil.now(),
+                            isStreaming = true
+                        ))
+                    }
+                }
+
+                // Emit the final message
+                emit(Message(
+                    id = aiMessageId,
+                    content = accumulatedContent,
+                    role = MessageRole.ASSISTANT,
+                    timestamp = TimeUtil.now(),
+                    isStreaming = false
+                ))
             }
-
-            val responseBody = response.body() ?: throw Exception("Empty response from API")
-            val content = responseBody.choices.firstOrNull()?.message?.content
-                ?: throw Exception("No content in response")
-
-            // Emit the complete message
-            emit(Message(
-                id = aiMessageId,
-                content = content,
-                role = MessageRole.ASSISTANT,
-                timestamp = TimeUtil.now(),
-                isStreaming = false
-            ))
         } catch (e: Exception) {
             Log.e("ChatRepository", "Error in sendMessage", e)
             emit(Message(
@@ -183,45 +217,6 @@ class ChatRepository @Inject constructor(
                 timestamp = TimeUtil.now(),
                 isError = true
             ))
-        }
-    }
-
-    private suspend fun parseStreamingResponse(
-        responseBody: ResponseBody,
-        startTime: Long,
-        onDelta: suspend (ChatDelta) -> Unit
-    ) {
-        responseBody.byteStream().bufferedReader().use { reader ->
-            while (true) {
-                val line = reader.readLine() ?: break
-                if (line.startsWith("data: ")) {
-                    val json = line.substring(6).trim()
-                    if (json == "[DONE]") {
-                        Log.d(TAG, "Repository: [DONE] signal received at ${System.currentTimeMillis() - startTime}ms")
-                        break
-                    }
-
-                    try {
-                        val jsonObject = gson.fromJson(json, JsonObject::class.java)
-                        val choices = jsonObject.getAsJsonArray("choices")
-                        if (choices != null && choices.size() > 0) {
-                            val delta = choices[0].asJsonObject.get("delta")?.asJsonObject
-                            if (delta != null) {
-                                val chatDelta = gson.fromJson(delta, ChatDelta::class.java)
-                                if (chatDelta.content != null) {
-                                    Log.d(TAG, "Repository: Token '${chatDelta.content}' received at ${System.currentTimeMillis() - startTime}ms")
-                                }
-                                onDelta(chatDelta)
-                                // Add a tiny delay to ensure UI can keep up
-                                delay(16) // One frame at 60fps
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Repository: Error parsing JSON at ${System.currentTimeMillis() - startTime}ms: $json", e)
-                        continue
-                    }
-                }
-            }
         }
     }
 
@@ -309,6 +304,45 @@ class ChatRepository @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error deleting audio file", e)
+            }
+        }
+    }
+
+    private suspend fun parseStreamingResponse(
+        responseBody: ResponseBody,
+        startTime: Long,
+        onDelta: suspend (ChatDelta) -> Unit
+    ) {
+        responseBody.byteStream().bufferedReader().use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.startsWith("data: ")) {
+                    val json = line.substring(6).trim()
+                    if (json == "[DONE]") {
+                        Log.d(TAG, "Repository: [DONE] signal received at ${System.currentTimeMillis() - startTime}ms")
+                        break
+                    }
+
+                    try {
+                        val jsonObject = gson.fromJson(json, JsonObject::class.java)
+                        val choices = jsonObject.getAsJsonArray("choices")
+                        if (choices != null && choices.size() > 0) {
+                            val delta = choices[0].asJsonObject.get("delta")?.asJsonObject
+                            if (delta != null) {
+                                val chatDelta = gson.fromJson(delta, ChatDelta::class.java)
+                                if (chatDelta.content != null) {
+                                    Log.d(TAG, "Repository: Token '${chatDelta.content}' received at ${System.currentTimeMillis() - startTime}ms")
+                                }
+                                onDelta(chatDelta)
+                                // Add a tiny delay to ensure UI can keep up
+                                delay(16) // One frame at 60fps
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Repository: Error parsing JSON at ${System.currentTimeMillis() - startTime}ms: $json", e)
+                        continue
+                    }
+                }
             }
         }
     }
