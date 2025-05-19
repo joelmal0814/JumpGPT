@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.jumpgpt.ui.theme.VoiceWaveActive
 import com.example.jumpgpt.ui.theme.VoiceWaveInactive
+import com.example.jumpgpt.ui.chat.components.SoundWaveIcon
 
 private val ButtonBorderColor = Color(0xFFE0E0E0) // Light gray color for the border
 
@@ -42,6 +43,7 @@ fun ChatInput(
     onSendClick: () -> Unit,
     isRecording: Boolean,
     onVoiceClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -79,6 +81,7 @@ fun ChatInput(
                 BasicTextField(
                     value = text,
                     onValueChange = onTextChange,
+                    enabled = enabled,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged { isFocused = it.isFocused },
@@ -94,7 +97,7 @@ fun ChatInput(
                     maxLines = 5
                 )
                 
-                if (text.isEmpty()) {
+                if (text.isEmpty() && enabled) {
                     Text(
                         text = "Ask anything",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -118,49 +121,47 @@ fun ChatInput(
                 ) {
                     IconButton(
                         onClick = onVoiceClick,
+                        enabled = enabled,
                         modifier = Modifier.size(24.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Voice chat",
-                            tint = Color.Black,
-                            modifier = Modifier.size(18.dp)
+                        SoundWaveIcon(
+                            modifier = Modifier.size(18.dp),
+                            color = if (enabled) Color.Black else Color.Gray
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Send button
                 Box(
                     modifier = Modifier
                         .size(36.dp)
                         .clip(CircleShape)
                         .then(
-                            if (text.isBlank()) {
+                            if (text.isBlank() || !enabled) {
                                 Modifier.border(1.dp, ButtonBorderColor, CircleShape)
                             } else {
                                 Modifier
                             }
                         )
                         .background(
-                            if (text.isNotBlank()) Color.Black
+                            if (text.isNotBlank() && enabled) Color.Black
                             else Color.White
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     IconButton(
                         onClick = onSendClick,
-                        enabled = text.isNotBlank(),
+                        enabled = text.isNotBlank() && enabled,
                         modifier = Modifier.size(24.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Send,
                             contentDescription = "Send message",
-                            tint = if (text.isNotBlank()) 
+                            tint = if (text.isNotBlank() && enabled) 
                                 Color.White
                             else 
-                                Color.Black,
+                                Color.Gray,
                             modifier = Modifier.size(18.dp)
                         )
                     }

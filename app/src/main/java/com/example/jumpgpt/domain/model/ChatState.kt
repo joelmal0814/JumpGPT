@@ -10,7 +10,8 @@ data class ChatState(
     val inputText: String = "",
     val isRecording: Boolean = false,
     val isPlaying: Boolean = false,
-    val currentPlayingMessageId: String? = null
+    val currentPlayingMessageId: String? = null,
+    val loadingTtsMessageId: String? = null
 ) {
     val canSendMessage: Boolean
         get() = inputText.isNotBlank() && !isLoading && !isRecording

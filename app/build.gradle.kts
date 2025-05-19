@@ -18,6 +18,19 @@ android {
         versionCode = 1
         versionName = "1.0"
 
+        // Add OpenAI API key from local.properties
+        val apiKey = rootProject.file("local.properties")
+            .readLines()
+            .firstOrNull { it.startsWith("OPENAI_API_KEY=") }
+            ?.substringAfter("=")
+            ?: ""
+            
+        buildConfigField(
+            "String",
+            "OPENAI_API_KEY",
+            "\"$apiKey\""
+        )
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -42,6 +55,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // Add this to enable BuildConfig generation
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.1"

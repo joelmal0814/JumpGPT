@@ -8,6 +8,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,19 +19,57 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlin.math.sin
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @Composable
 fun VoiceChatScreen(
     onClose: () -> Unit,
-    onSendVoiceMessage: (String) -> Unit,
-    viewModel: VoiceChatViewModel = hiltViewModel()
+    onMessageSent: (String) -> Unit,
+    viewModel: VoiceChatViewModel,
+    activeConversationId: String
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+
+    // Set the active conversation ID when the screen is created
+    LaunchedEffect(activeConversationId) {
+        viewModel.setActiveConversation(activeConversationId)
+    }
+
+    // Start voice activation when screen is opened
+    LaunchedEffect(Unit) {
+        viewModel.startVoiceActivation()
+    }
+
+    // Handle message sending and response playback
+    LaunchedEffect(state.transcribedText) {
+        state.transcribedText?.let { text ->
+            if (text.isNotBlank() && !state.isRecording && !state.isProcessing) {
+                viewModel.sendMessageAndSignalCompletion(text) {
+                    // Don't close the screen, just start listening for the next message
+                    viewModel.startVoiceActivation()
+                }
+            }
+        }
+    }
+
+    // Handle errors
+    LaunchedEffect(state.error) {
+        state.error?.let { error ->
+            if (error.isNotBlank()) {
+                // Show error for 3 seconds then clear it
+                delay(3000)
+                viewModel.clearError()
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -38,7 +78,10 @@ fun VoiceChatScreen(
     ) {
         // Close button
         IconButton(
-            onClick = onClose,
+            onClick = {
+                viewModel.stopResponsePlayback()
+                onClose()
+            },
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(16.dp)
@@ -60,6 +103,7 @@ fun VoiceChatScreen(
         ) {
             VoiceWaveform(
                 isRecording = state.isRecording,
+                isListeningForVoice = state.isListeningForVoice,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -68,14 +112,16 @@ fun VoiceChatScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Recording duration or status text
+            // Status text
             Text(
                 text = when {
                     state.error != null -> state.error!!
                     state.isProcessing -> "Processing..."
+                    state.isPlayingResponse -> "Playing response..."
                     state.isRecording -> "${state.recordingDuration.milliseconds}"
+                    state.isListeningForVoice -> "Listening for voice..."
                     state.transcribedText != null -> state.transcribedText!!
-                    else -> "Tap to start speaking"
+                    else -> "Ready to listen..."
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = if (state.error != null) MaterialTheme.colorScheme.error 
@@ -85,47 +131,46 @@ fun VoiceChatScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Record button
-            Box(
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (state.isRecording) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.primary
-                    ),
-                contentAlignment = Alignment.Center
+            // Controls row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = {
-                        if (state.isRecording) {
-                            viewModel.stopRecording()
-                        } else {
-                            viewModel.startRecording()
-                        }
-                    },
-                    modifier = Modifier.size(48.dp),
-                    enabled = !state.isProcessing
-                ) {
-                    Icon(
-                        imageVector = if (state.isRecording) Icons.Default.Send else Icons.Default.Mic,
-                        contentDescription = if (state.isRecording) "Stop recording" else "Start recording",
-                        tint = MaterialTheme.colorScheme.onPrimary
-                    )
+                // Manual record button (for when voice activation fails)
+                if (!state.isRecording && !state.isListeningForVoice) {
+                    IconButton(
+                        onClick = { viewModel.startRecording() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        enabled = !state.isProcessing && !state.isPlayingResponse
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Start recording",
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
                 }
-            }
 
-            // Send button (only show when we have transcribed text)
-            if (state.transcribedText != null && !state.isRecording && !state.isProcessing) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = { 
-                        onSendVoiceMessage(state.transcribedText!!)
-                        onClose()
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Send Message")
+                // Stop/Play response button
+                if (state.isPlayingResponse) {
+                    IconButton(
+                        onClick = { viewModel.stopResponsePlayback() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.error),
+                        enabled = true
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Pause,
+                            contentDescription = "Stop response",
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
                 }
             }
         }
@@ -135,6 +180,7 @@ fun VoiceChatScreen(
 @Composable
 fun VoiceWaveform(
     isRecording: Boolean,
+    isListeningForVoice: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -155,7 +201,7 @@ fun VoiceWaveform(
         val height = size.height
         val centerY = height / 2
 
-        if (isRecording) {
+        if (isRecording || isListeningForVoice) {
             // Draw multiple sine waves with different phases and amplitudes
             for (i in 0..2) {
                 val amplitude = (height / 4) * (1 - i * 0.2f)
